@@ -68,20 +68,23 @@ class EMALayer(nn.Module):
         self.mu = torch.zeros((D, H))
 
         # weights
-        self.l_z  = torch.nn.Linear(N, Z) # weight to compute intermediate z
-        self.l_v = torch.nn.Linear(N, V)
+        self.l_z  = torch.nn.Linear(D, Z) # weight to compute intermediate z
+        self.l_v = torch.nn.Linear(Z, V)
 
         # learnable scalars and offsets
-        self.k_q = torch.nn.Parameter((Z,), requires_grad=True)
-        self.mu_q = torch.nn.Parameter((Z,), requires_grad=True)
-        self.k_k = torch.nn.Parameter((Z,), requires_grad=True)
-        self.mu_k = torch.nn.Parameter((Z,), requires_grad=True)
+        self.k_q = torch.nn.Parameter(torch.randn((Z,)), requires_grad=True)
+        self.mu_q = torch.nn.Parameter(torch.randn((Z,)), requires_grad=True)
+        self.k_k = torch.nn.Parameter(torch.randn((Z,)), requires_grad=True)
+        self.mu_k = torch.nn.Parameter(torch.randn((Z,)), requires_grad=True)
 
         # attention operation    
-        self.sha = SHA()
+        #self.sha = SHA()
 
         # other
-        self.b_rel = pos_bias(N)
+        #self.b_rel = pos_bias(N)
+        self.silu = torch.nn.SiLU()
+        self.sigmoid = torch.nn.Sigmoid()
+
     def forward(self, x):
         # N is time dimension
         # D is d_model
@@ -91,21 +94,17 @@ class EMALayer(nn.Module):
         N, D = x.shape
         x_p = torch.einsum('ND, DH -> NDH', x, self.beta) #x @ self.beta
         x_i = linear_ema(x_p, self.alpha, self.delta)
-        x_i = torch.einsum('NDH, DH -> ND')
+        x_i = torch.einsum('NDH, DH -> ND', x_i, self.mu)
 
-        z = self.l_z(x_i)
-
-        Q = z * k_q + mu_q
-        K = z * k_k + mu_k
+        z = self.l_z(x_i) # N, D -> N, Z. linear has to be (D, Z)
+        Q = z * self.k_q + self.mu_q
+        K = z * self.k_k + self.mu_k
         V = self.l_v(x)
+        #O = self.sha(Q, K, V)
+        #z = l_z(x_e)
+        #x_o = x_e @ self.n
 
-        O = self.sha(Q, K, V)
-
-        
-        z = l_z(x_e)
-        x_o = x_e @ self.n
-
-        return x_o
+        #return x_o
 
 class MegaLayer(nn.Module):
     def __init__(self):
