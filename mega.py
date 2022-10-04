@@ -41,11 +41,10 @@ class SHA(nn.Module):
         return torch.einsum('mv, m -> v', key_weights, V)
 
 def linear_ema(x, alpha, delta):
-
     N, D, H = x.shape
     for i in range(D):
         for j in range(0, N - 1):
-            x[j+1] = x[j] + x[j+1]
+            x[j+1][i] = x[j][i] + x[j+1][i]
     
     return x
 
@@ -55,15 +54,34 @@ class EMALayer(nn.Module):
         D = 32
         H = 128
 
+        # attention-specific params
+        Z = 32
+        V = 32
+
         self.H = 128
         self.alpha = torch.zeros((D, ))
         self.delta = torch.zeros((D, ))
-        self.beta = torch.zeros((D, H))
         self.n = torch.zeros((D, H)) # lol n
 
+        # projection matrices (make Linear later)
+        self.beta = torch.zeros((D, H))
+        self.mu = torch.zeros((D, H))
+
         # weights
-        #self.l_z = torch.nn.Linear(NDH -> NZ)
-    
+        self.l_z  = torch.nn.Linear(N, Z) # weight to compute intermediate z
+        self.l_v = torch.nn.Linear(N, V)
+
+        # learnable scalars and offsets
+        self.k_q = torch.nn.Parameter((Z,), requires_grad=True)
+        self.mu_q = torch.nn.Parameter((Z,), requires_grad=True)
+        self.k_k = torch.nn.Parameter((Z,), requires_grad=True)
+        self.mu_k = torch.nn.Parameter((Z,), requires_grad=True)
+
+        # attention operation    
+        self.sha = SHA()
+
+        # other
+        self.b_rel = pos_bias(N)
     def forward(self, x):
         # N is time dimension
         # D is d_model
@@ -72,11 +90,19 @@ class EMALayer(nn.Module):
 
         N, D = x.shape
         x_p = torch.einsum('ND, DH -> NDH', x, self.beta) #x @ self.beta
+        x_i = linear_ema(x_p, self.alpha, self.delta)
+        x_i = torch.einsum('NDH, DH -> ND')
 
-        assert x_p.shape == (N, D, self.H)
+        z = self.l_z(x_i)
 
-        x_e = linear_ema(x_p, self.alpha, self.delta)
+        Q = z * k_q + mu_q
+        K = z * k_k + mu_k
+        V = self.l_v(x)
 
+        O = self.sha(Q, K, V)
+
+        
+        z = l_z(x_e)
         x_o = x_e @ self.n
 
         return x_o
